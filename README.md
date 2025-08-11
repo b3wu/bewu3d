@@ -1,4 +1,4 @@
-# Bewu3D – MVP v8 (3MF + koszyk agregowany)
+# Bewu3D – MVP v7 (cart aggregation)
 
 ## Lokalne uruchomienie
 ```bash
@@ -14,8 +14,7 @@ npm run dev
 - ENV: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `CONTACT_TO`
 
 ## Funkcje
-- Wgrywanie **STL i 3MF** (Bambu Studio projects) + podgląd 3D.
-- Wycena wg wagi (150 PLN/kg), dopłata AMS, minimalna 30 PLN **na poziomie koszyka**.
-- „Wyślij koszyk do wyceny” – mail z podsumowaniem, miniaturami, załącznikami (STL/3MF ≤ 5 MB/szt.).
+- Wycenia wg wagi (150 PLN/kg), bez edycji parametrów przez użytkownika.
+- Dopłata AMS (5 PLN za kolor >1), minimalne zamówienie 30 PLN **na poziomie koszyka**.
+- „Wyślij do wyceny” wysyła cały koszyk, miniatury i załączniki STL (≤5 MB/plik).
 - Kontakt i wycena przez Netlify Functions (nodemailer).
-- Uwaga: 3MF nie zawiera faktycznego krojenia – wycena jest orientacyjna.
