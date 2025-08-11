@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import StlViewer from "./components/StlViewer";
-import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import * as THREE from "three";
 
 function LogoBewu3D({ className = "h-8 w-8" }: { className?: string }) {
