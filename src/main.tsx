@@ -15,9 +15,7 @@ function Root() {
   }, []);
 
   if (hash.startsWith('#/thanks')) { return <ThanksPage goHome={() => { window.location.hash = '#/'; }} />; }
-  if (hash.startsWith('#/contact')) {
-    return <ContactPage goHome={() => { window.location.hash = '#/'; }} />;
-  }
+  if (hash.startsWith('#/contact')) { return <ContactPage goHome={() => { window.location.hash = '#/'; }} />; }
   return <App goContact={() => { window.location.hash = '#/contact'; }} />;
 }
 

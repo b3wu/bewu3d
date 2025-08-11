@@ -7,10 +7,10 @@ exports.handler = async function(event, context) {
   }
   try {
     const body = JSON.parse(event.body || '{}');
-    const { name, email, phone, notes, model, attachment, thumb } = body || {};
+    const { name, email, phone, notes, cart, attachments = [] } = body || {};
 
-    if (!model || !model.filename) {
-      return { statusCode: 400, body: JSON.stringify({ ok: false, error: 'Brak danych modelu.' }) };
+    if (!cart || !Array.isArray(cart.items) || cart.items.length === 0) {
+      return { statusCode: 400, body: JSON.stringify({ ok: false, error: 'Brak pozycji w koszyku.' }) };
     }
 
     const transporter = nodemailer.createTransport({
@@ -23,44 +23,42 @@ exports.handler = async function(event, context) {
     const to = process.env.CONTACT_TO;
     if (!to) return { statusCode: 500, body: JSON.stringify({ ok: false, error: 'Brak CONTACT_TO w konfiguracji.' }) };
 
-    const subject = `[Wycena] ${model.filename} (${model.material || '-'}, ${model.weightG || '-'} g, x${model.copies || 1})`;
-
-    const lines = [
+    const header = [
       `Imię: ${name || '-'}`,
       `E-mail: ${email || '-'}`,
       `Telefon: ${phone || '-'}`,
       ``,
-      `Model:`,
-      `  plik: ${model.filename} (${model.size || 0} B)`,
-      `  materiał: ${model.material || '-'}`,
-      `  kolory (AMS): ${model.colors || 1}`,
-      `  ilość: ${model.copies || 1}`,
-      `  waga: ${model.weightG || '-'} g`,
-      `  czas: ${model.timeH || '-'} h`,
-      `  cena/szt.: ${model.pricePerPiece != null ? model.pricePerPiece + ' PLN' : '-'}`,
-      `  razem: ${model.total != null ? model.total + ' PLN' : '-'}`,
-      ``,
-      `Uwagi: ${notes || '-'}`,
+      `Pozycje:`,
     ];
+
+    const lines = [];
+    cart.items.forEach((it, idx) => {
+      if (it.type === 'product') {
+        lines.push(` ${idx+1}. Produkt: ${it.name} ×${it.qty}`);
+        lines.push(`    cena/szt.: ${it.pricePerPiece} PLN  razem: ${it.total} PLN`);
+      } else {
+        lines.push(` ${idx+1}. STL: ${it.filename} ×${it.copies}`);
+        lines.push(`    materiał: ${it.material}  kolory(AMS): ${it.colors}`);
+        lines.push(`    waga: ${it.weightG} g  cena/szt.: ${it.pricePerPiece} PLN  razem: ${it.total} PLN`);
+      }
+    });
+    lines.push(``);
+    lines.push(`Podsumowanie: sub‑total ${Number(cart.subTotal).toFixed(2)} PLN`);
+    lines.push(`Opłata minimalna: ${Number(cart.minSurcharge).toFixed(2)} PLN`);
+    lines.push(`RAZEM: ${Number(cart.total).toFixed(2)} PLN`);
+    lines.push(``);
+    lines.push(`Uwagi: ${notes || '-'}`);
 
     const mailOptions = {
       from: `"Bewu3D" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
       to,
-      subject,
-      text: lines.join('\n'),
-      attachments: [].concat(
-        attachment && attachment.contentBase64 ? [{
-          filename: attachment.filename || 'model.stl',
-          content: Buffer.from(attachment.contentBase64, 'base64'),
-          contentType: attachment.mimeType || 'application/octet-stream',
-        }] : []
-      ).concat(
-        thumb && thumb.startsWith('data:image/') ? [{
-          filename: 'miniatura.png',
-          content: Buffer.from(thumb.split(',')[1], 'base64'),
-          contentType: 'image/png',
-        }] : []
-      ),
+      subject: `[Wycena] ${cart.items.length} pozycji (razem ${Number(cart.total).toFixed(2)} PLN)`,
+      text: header.concat(lines).join('\n'),
+      attachments: attachments.slice(0, 6).map((a, i) => ({
+        filename: a.filename || `model-${i+1}.stl`,
+        content: Buffer.from(a.contentBase64, 'base64'),
+        contentType: a.mimeType || 'application/octet-stream',
+      })),
     };
 
     const info = await transporter.sendMail(mailOptions);

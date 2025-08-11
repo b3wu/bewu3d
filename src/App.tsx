@@ -61,7 +61,7 @@ async function estimateVolumeCm3FromSTL(file: File): Promise<number | null> {
 }
 
 type CartProductLine = { kind: 'product'; product: Product; qty: number };
-type CartCustomLine = { kind: 'stl'; name: string; price: number; qty: number; meta: { material: Material; filename: string; weightG: number; colors: number; thumb?: string } };
+type CartCustomLine = { kind: 'stl'; name: string; price: number; qty: number; meta: { material: Material; filename: string; weightG: number; colors: number; thumb?: string; stlBase64?: string } };
 type CartLine = CartProductLine | CartCustomLine;
 
 function useCart() {
@@ -83,9 +83,12 @@ function useCart() {
   function remove(index: number) { setLines(prev => prev.filter((_, i) => i !== index)); }
   function setQty(index: number, qty: number) { setLines(prev => prev.map((l, i) => i === index ? ({ ...l, qty: Math.max(1, qty) } as CartLine) : l)); }
   function clear() { setLines([]); }
+
   const count = lines.reduce((s, l) => s + (l as any).qty, 0);
-  const total = lines.reduce((s, l) => s + (l as any).qty * (l.kind === 'product' ? (l as any).product.price : (l as any).price), 0);
-  return { lines, addProduct, addCustom, remove, setQty, clear, count, total };
+  const subTotal = lines.reduce((s, l) => s + (l as any).qty * (l.kind === 'product' ? (l as any).product.price : (l as any).price), 0);
+  const minSurcharge = Math.max(0, MIN_ORDER_TOTAL_PLN - subTotal);
+  const total = subTotal + minSurcharge;
+  return { lines, addProduct, addCustom, remove, setQty, clear, count, subTotal, minSurcharge, total };
 }
 
 export default function App({ goContact }: { goContact: () => void }) {
@@ -140,20 +143,22 @@ export default function App({ goContact }: { goContact: () => void }) {
     const basePerPiece = (autoWeightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
     const extraColors = Math.max(0, amsColors - AMS_FREE_COLORS);
     const amsSurchargePerPiece = extraColors * AMS_SURCHARGE_PER_EXTRA_COLOR_PLN;
-    const perPieceBeforeMin = basePerPiece + amsSurchargePerPiece;
+    const perPiece = basePerPiece + amsSurchargePerPiece;
     const qty = Math.max(1, copies);
-    const totalBeforeMin = perPieceBeforeMin * qty;
-    const total = Math.max(MIN_ORDER_TOTAL_PLN, totalBeforeMin);
-    const perPiece = total / qty; // rozdziel min. opłatę proporcjonalnie
-    const appliedMin = total > totalBeforeMin ? MIN_ORDER_TOTAL_PLN : 0;
-    return { perPiece, total, basePerPiece, amsSurchargePerPiece, extraColors, appliedMin };
+    const total = perPiece * qty;
+    return { perPiece, total, basePerPiece, amsSurchargePerPiece, extraColors };
   }, [file, autoWeightG, copies, amsColors]);
 
   async function addCurrentModelToCart() {
     if (!file || !estimate || autoWeightG == null) return;
     const thumb = viewerRef.current?.capture() || undefined;
+    let stlBase64: string | undefined = undefined;
+    if (file.size <= 5 * 1024 * 1024) {
+      const buf = await file.arrayBuffer();
+      stlBase64 = btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)));
+    }
     cart.addCustom(file.name, Number(estimate.perPiece.toFixed(2)), copies, {
-      material, filename: file.name, weightG: autoWeightG, colors: amsColors, thumb
+      material, filename: file.name, weightG: autoWeightG, colors: amsColors, thumb, stlBase64
     });
     setCartOpen(true);
   }
@@ -170,28 +175,59 @@ export default function App({ goContact }: { goContact: () => void }) {
   function openQuote() { setShowQuote(true); setQStatus(null); }
 
   async function sendQuote() {
-    if (!file || !estimate || autoWeightG == null) return;
+    if (!estimate && cart.lines.length === 0) return;
     setQSending(true); setQStatus(null);
     try {
-      let attachment = null;
-      if (file.size <= 10 * 1024 * 1024) { // 10 MB
-        const buf = await file.arrayBuffer();
-        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)));
-        attachment = { filename: file.name, mimeType: "model/stl", contentBase64: base64 };
+      // Build models array from cart; if empty, use current file as single model
+      let models: any[] = [];
+      let attachments: any[] = [];
+      for (const l of cart.lines as any[]) {
+        if (l.kind === 'product') {
+          models.push({ type: 'product', name: (l as any).product.name, qty: (l as any).qty, pricePerPiece: (l as any).product.price, total: (l as any).qty * (l as any).product.price });
+        } else {
+          models.push({
+            type: 'stl',
+            filename: (l as any).meta.filename,
+            material: (l as any).meta.material,
+            colors: (l as any).meta.colors,
+            copies: (l as any).qty,
+            weightG: (l as any).meta.weightG,
+            pricePerPiece: (l as any).price,
+            total: (l as any).price * (l as any).qty,
+            thumb: (l as any).meta.thumb || null
+          });
+          if ((l as any).meta?.stlBase64) {
+            attachments.push({ filename: (l as any).meta.filename, mimeType: "model/stl", contentBase64: (l as any).meta.stlBase64 });
+          }
+        }
       }
+      if (models.length === 0 && file && autoWeightG != null) {
+        const basePerPiece = (autoWeightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
+        const extraColors = Math.max(0, amsColors - AMS_FREE_COLORS);
+        const amsSurchargePerPiece = extraColors * AMS_SURCHARGE_PER_EXTRA_COLOR_PLN;
+        const perPiece = basePerPiece + amsSurchargePerPiece;
+        const qty = Math.max(1, copies);
+        models.push({
+          type: 'stl', filename: file.name, material, colors: amsColors, copies: qty,
+          weightG: autoWeightG, pricePerPiece: Number(perPiece.toFixed(2)), total: Number((perPiece*qty).toFixed(2)),
+          thumb: viewerRef.current?.capture() || null
+        });
+        if (file.size <= 5 * 1024 * 1024) {
+          const buf = await file.arrayBuffer();
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)));
+          attachments.push({ filename: file.name, mimeType: "model/stl", contentBase64: base64 });
+        }
+      }
+
       const payload = {
         name: qName, email: qEmail, phone: qPhone, notes: qNotes,
-        model: {
-          filename: file.name, size: file.size,
-          material, colors: amsColors, copies,
-          weightG: autoWeightG, timeH: autoTimeH,
-          pricePerPiece: Number(estimate.perPiece.toFixed(2)),
-          amsSurchargePerPiece: Number(estimate.amsSurchargePerPiece.toFixed(2)),
-          appliedMinOrder: estimate.appliedMin,
-          total: Number(estimate.total.toFixed(2)),
+        cart: {
+          subTotal: cart.subTotal,
+          minSurcharge: cart.minSurcharge,
+          total: cart.total,
+          items: models
         },
-        attachment,
-        thumb: viewerRef.current?.capture() || null,
+        attachments,
       };
       const res = await fetch("/api/quote", {
         method: "POST",
@@ -238,7 +274,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                 <textarea value={qNotes} onChange={e=>setQNotes(e.target.value)} rows={4} className="mt-1 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
               </div>
               <div className="rounded-xl border border-white/10 p-3 text-xs text-white/60">
-                Załączę dane modelu (materiał, waga, szac. czas, cena) i miniaturę. Plik STL do 10 MB zostanie dołączony jako załącznik.
+                Wyślemy zawartość koszyka (wszystkie modele i produkty) z podsumowaniem, miniaturami i załącznikami STL (do 5 MB/szt., łącznie kilka plików).
               </div>
               <div className="flex items-center gap-3 pt-1">
                 <button disabled={qSending} onClick={sendQuote} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">{qSending ? "Wysyłanie..." : "Wyślij"}</button>
@@ -285,11 +321,13 @@ export default function App({ goContact }: { goContact: () => void }) {
           ))}
         </div>
         <div className="mt-4 border-t border-white/10 pt-4">
-          <div className="flex items-center justify-between text-sm">
-            <div>Suma</div>
-            <div className="font-semibold">{cart.total} PLN</div>
+          <div className="flex items-center justify-between text-sm"><div>Sub‑total</div><div className="font-semibold">{cart.subTotal.toFixed(2)} PLN</div></div>
+          <div className="mt-1 flex items-center justify-between text-sm text-white/70"><div>Opłata minimalna</div><div>{cart.minSurcharge > 0 ? cart.minSurcharge.toFixed(2) + " PLN" : "0 PLN"}</div></div>
+          <div className="mt-1 flex items-center justify-between text-sm"><div><strong>Razem</strong></div><div className="font-semibold">{cart.total.toFixed(2)} PLN</div></div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button onClick={() => alert("Demo checkout – tu podpinamy Stripe Checkout")} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Płatność</button>
+            <button onClick={() => setShowQuote(true)} className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/10">Wyślij koszyk do wyceny</button>
           </div>
-          <button onClick={() => alert("Demo checkout – tu podpinamy Stripe Checkout")} className="mt-3 w-full rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Przejdź do płatności</button>
           {cart.lines.length > 0 && <button onClick={cart.clear} className="mt-2 w-full rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/10">Wyczyść koszyk</button>}
         </div>
       </div>
@@ -386,7 +424,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                   <div className="text-sm text-white/70">Szacunek dla {copies} szt. ({material})</div>
                   <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
                     <div className="text-white/60">Cena za sztukę</div><div className="text-right font-semibold">{estimate.perPiece.toFixed(2)} PLN</div>
-                    <div className="text-white/60">Razem</div><div className="text-right font-semibold">{estimate.total.toFixed(2)} PLN{estimate.appliedMin ? " (z min. " + estimate.appliedMin + " PLN)" : ""}</div>
+                    <div className="text-white/60">Razem (ten model)</div><div className="text-right font-semibold">{estimate.total.toFixed(2)} PLN</div>
                     <div className="text-white/60">Dopłata AMS</div><div className="text-right">{estimate.amsSurchargePerPiece.toFixed(2)} PLN/szt. {estimate.extraColors>0 ? "(+"+estimate.extraColors+" kol.)" : "(brak)"}</div>
                     <div className="text-white/60">Szac. czas druku</div><div className="text-right font-semibold">{autoTimeH ? autoTimeH.toFixed(2) : '-'} h</div>
                     <div className="text-white/60">Waga</div><div className="text-right font-semibold">{autoWeightG?.toFixed(0)} g</div>
@@ -394,7 +432,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                   <div className="mt-3 text-xs text-white/60">Wycena orientacyjna – finalna potwierdzana po krojeniu w Bambu Studio.</div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={addCurrentModelToCart} className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20">Dodaj model do koszyka</button>
-                    <button onClick={openQuote} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Wyślij do wyceny</button>
+                    <button onClick={() => setShowQuote(true)} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Wyślij koszyk do wyceny</button>
                     <button onClick={goContact} className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/10">Zadaj pytanie</button>
                   </div>
                 </div>

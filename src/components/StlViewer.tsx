@@ -77,7 +77,6 @@ const StlViewer = React.forwardRef<StlViewerHandle, Props>(({ file }, ref) => {
     function centerXYDropToBed(geometry: THREE.BufferGeometry) {
       geometry.computeBoundingBox();
       const bb = geometry.boundingBox!;
-      const size = new THREE.Vector3(); bb.getSize(size);
       const center = new THREE.Vector3(); bb.getCenter(center);
       geometry.translate(-center.x, -center.y, 0);
       geometry.computeBoundingBox();
@@ -125,7 +124,6 @@ const StlViewer = React.forwardRef<StlViewerHandle, Props>(({ file }, ref) => {
     });
     ro.observe(mount);
 
-    let currentMesh: THREE.Mesh | null = null;
     (async () => {
       if (!arrayBufferPromise) return;
       const arrayBuffer = await arrayBufferPromise;
@@ -150,8 +148,8 @@ const StlViewer = React.forwardRef<StlViewerHandle, Props>(({ file }, ref) => {
       setHeightRange({ min: minz, max: maxz });
       setClipZ(minz);
 
-      currentMesh = new THREE.Mesh(geometry, material);
-      group.add(currentMesh);
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
 
       geometry.computeBoundingSphere();
       const r = geometry.boundingSphere?.radius || 2;

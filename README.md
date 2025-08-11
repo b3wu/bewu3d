@@ -1,6 +1,6 @@
-# Bewu3D – MVP v3
+# Bewu3D – MVP v7 (cart aggregation)
 
-## Szybki start (lokalnie)
+## Lokalne uruchomienie
 ```bash
 npm install
 npm run dev
@@ -8,12 +8,13 @@ npm run dev
 ```
 
 ## Netlify (deploy)
-- Build command: `npm run build`
+- Build: `npm run build`
 - Publish: `dist`
 - Functions: `netlify/functions`
 - ENV: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `CONTACT_TO`
 
-## Wycena
-- Cena = waga × **150 PLN/kg** (edytuj `MATERIAL_RATE_PLN_PER_KG` w `src/App.tsx`).
-- Auto-waga z STL (objętość × gęstość × współczynnik zużycia) – najlepiej nadpisać wagę i czas z Bambu Studio.
-
+## Funkcje
+- Wycenia wg wagi (150 PLN/kg), bez edycji parametrów przez użytkownika.
+- Dopłata AMS (5 PLN za kolor >1), minimalne zamówienie 30 PLN **na poziomie koszyka**.
+- „Wyślij do wyceny” wysyła cały koszyk, miniatury i załączniki STL (≤5 MB/plik).
+- Kontakt i wycena przez Netlify Functions (nodemailer).
