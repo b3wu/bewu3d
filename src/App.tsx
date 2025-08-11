@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import StlViewer from "./components/StlViewer";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import StlViewer, { StlViewerHandle } from "./components/StlViewer";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import * as THREE from "three";
 import {
@@ -58,7 +58,7 @@ async function estimateVolumeCm3FromSTL(file: File): Promise<number | null> {
 }
 
 type CartProductLine = { kind: 'product'; product: Product; qty: number };
-type CartCustomLine = { kind: 'stl'; name: string; price: number; qty: number; meta: { material: Material; filename: string; weightG: number; colors: number } };
+type CartCustomLine = { kind: 'stl'; name: string; price: number; qty: number; meta: { material: Material; filename: string; weightG: number; colors: number; thumb?: string } };
 type CartLine = CartProductLine | CartCustomLine;
 
 function useCart() {
@@ -98,6 +98,8 @@ export default function App({ goContact }: { goContact: () => void }) {
   const cart = useCart();
   const [cartOpen, setCartOpen] = useState(false);
 
+  const viewerRef = useRef<StlViewerHandle | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     if (!file) { setAutoVolCm3(null); setAutoWeightG(null); setAutoTimeH(null); return; }
@@ -115,10 +117,9 @@ export default function App({ goContact }: { goContact: () => void }) {
         setAutoTimeH(parseFloat((rounded / rate).toFixed(2)));
       }
     })();
-    return () => { cancelled = True; };
+    return () => { cancelled = true; };
   }, [file, material]);
 
-  // Recompute weight and time when material changes (if we still have volume)
   useEffect(() => {
     if (autoVolCm3 && autoVolCm3 > 0) {
       const usage = USAGE_FACTOR[material];
@@ -138,17 +139,106 @@ export default function App({ goContact }: { goContact: () => void }) {
     return { perPiece, total };
   }, [file, autoWeightG, copies]);
 
-  function addCurrentModelToCart() {
+  async function addCurrentModelToCart() {
     if (!file || !estimate || autoWeightG == null) return;
+    const thumb = viewerRef.current?.capture() || undefined;
     cart.addCustom(file.name, Number(estimate.perPiece.toFixed(2)), copies, {
-      material, filename: file.name, weightG: autoWeightG, colors: amsColors
+      material, filename: file.name, weightG: autoWeightG, colors: amsColors, thumb
     });
     setCartOpen(true);
   }
 
+  // Quote modal
+  const [showQuote, setShowQuote] = useState(false);
+  const [qName, setQName] = useState("");
+  const [qEmail, setQEmail] = useState("");
+  const [qPhone, setQPhone] = useState("");
+  const [qNotes, setQNotes] = useState("");
+  const [qSending, setQSending] = useState(false);
+  const [qStatus, setQStatus] = useState<null | { ok: boolean; msg: string }>(null);
+
+  function openQuote() { setShowQuote(true); setQStatus(null); }
+
+  async function sendQuote() {
+    if (!file || !estimate || autoWeightG == null) return;
+    setQSending(true); setQStatus(null);
+    try {
+      let attachment = null;
+      if (file.size <= 10 * 1024 * 1024) { // 10 MB
+        const buf = await file.arrayBuffer();
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(buf as ArrayBuffer)));
+        attachment = { filename: file.name, mimeType: "model/stl", contentBase64: base64 };
+      }
+      const payload = {
+        name: qName, email: qEmail, phone: qPhone, notes: qNotes,
+        model: {
+          filename: file.name, size: file.size,
+          material, colors: amsColors, copies,
+          weightG: autoWeightG, timeH: autoTimeH,
+          pricePerPiece: Number(estimate.perPiece.toFixed(2)),
+          total: Number(estimate.total.toFixed(2)),
+        },
+        attachment,
+        thumb: viewerRef.current?.capture() || null,
+      };
+      const res = await fetch("/api/quote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.ok) { setQStatus({ ok: true, msg: "Wysłane. Odezwiemy się wkrótce." }); }
+      else { setQStatus({ ok: false, msg: data.error || "Nie udało się wysłać." }); }
+    } catch {
+      setQStatus({ ok: false, msg: "Błąd połączenia." });
+    } finally {
+      setQSending(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#0B0F14] text-white">
-      <div className={"fixed inset-y-0 right-0 z-50 w-80 transform bg-[#0B0F14] p-4 shadow-2xl ring-1 ring-white/10 transition-transform " + (cartOpen ? "translate-x-0" : "translate-x-full")}>
+      {/* Quote Modal */}
+      {showQuote && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0B0F14] p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Wyślij do wyceny</h3>
+              <button onClick={()=>setShowQuote(false)} className="rounded-lg border border-white/10 px-2 py-1 text-sm hover:bg-white/10">Zamknij</button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm text-white/80">Imię</label>
+                  <input value={qName} onChange={e=>setQName(e.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
+                </div>
+                <div>
+                  <label className="text-sm text-white/80">E-mail</label>
+                  <input type="email" value={qEmail} onChange={e=>setQEmail(e.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
+                </div>
+              </div>
+              <div>
+                <label className="text-sm text-white/80">Telefon (opcjonalnie)</label>
+                <input value={qPhone} onChange={e=>setQPhone(e.target.value)} className="mt-1 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
+              </div>
+              <div>
+                <label className="text-sm text-white/80">Uwagi</label>
+                <textarea value={qNotes} onChange={e=>setQNotes(e.target.value)} rows={4} className="mt-1 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
+              </div>
+              <div className="rounded-xl border border-white/10 p-3 text-xs text-white/60">
+                Załączę dane modelu (materiał, waga, szac. czas, cena) i miniaturę. Plik STL do 10 MB zostanie dołączony jako załącznik.
+              </div>
+              <div className="flex items-center gap-3 pt-1">
+                <button disabled={qSending} onClick={sendQuote} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">{qSending ? "Wysyłanie..." : "Wyślij"}</button>
+                {qStatus && <span className={qStatus.ok ? "text-emerald-300 text-sm" : "text-rose-300 text-sm"}>{qStatus.msg}</span>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cart Drawer */}
+      <div className={"fixed inset-y-0 right-0 z-50 w-96 transform bg-[#0B0F14] p-4 shadow-2xl ring-1 ring-white/10 transition-transform " + (cartOpen ? "translate-x-0" : "translate-x-full")}>
         <div className="flex items-center justify-between">
           <div className="text-lg font-semibold">Twój koszyk</div>
           <button onClick={() => setCartOpen(false)} className="rounded-lg border border-white/10 px-2 py-1 text-sm hover:bg-white/10">Zamknij</button>
@@ -156,23 +246,28 @@ export default function App({ goContact }: { goContact: () => void }) {
         <div className="mt-4 space-y-3 overflow-auto" style={{maxHeight: "70vh"}}>
           {cart.lines.length === 0 && <div className="text-sm text-white/60">Koszyk jest pusty.</div>}
           {cart.lines.map((l, idx) => (
-            <div key={idx} className="rounded-2xl border border-white/10 p-3">
-              <div className="flex items-center justify-between">
-                <div className="text-sm">
-                  {l.kind === 'product' ? (l as any).product.name : `${(l as any).name} (${(l as any).meta.material}, ${(l as any).meta.weightG} g, kolory: ${(l as any).meta.colors})`}
-                </div>
-                <div className="text-sm font-semibold">{(l.kind === 'product' ? (l as any).product.price : (l as any).price)} PLN</div>
-              </div>
-              {l.kind === 'stl' && (
-                <div className="mt-1 text-xs text-white/50">Plik: {(l as any).meta.filename}</div>
+            <div key={idx} className="flex gap-3 rounded-2xl border border-white/10 p-3">
+              {l.kind === 'stl' && (l as any).meta.thumb && (
+                <img src={(l as any).meta.thumb} alt="miniatura" className="h-16 w-16 rounded-lg object-cover ring-1 ring-white/10" />
               )}
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <button onClick={() => cart.setQty(idx, (l as any).qty - 1)} className="w-7 rounded-lg border border-white/10 hover:bg-white/10">-</button>
-                  <input type="number" className="w-12 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-sm" value={(l as any).qty} min={1} onChange={(e)=>cart.setQty(idx, parseInt(e.target.value||'1'))} />
-                  <button onClick={() => cart.setQty(idx, (l as any).qty + 1)} className="w-7 rounded-lg border border-white/10 hover:bg-white/10">+</button>
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">
+                    {l.kind === 'product' ? (l as any).product.name : `${(l as any).name} (${(l as any).meta.material}, ${(l as any).meta.weightG} g, kolory: ${(l as any).meta.colors})`}
+                  </div>
+                  <div className="text-sm font-semibold">{(l.kind === 'product' ? (l as any).product.price : (l as any).price)} PLN</div>
                 </div>
-                <button onClick={() => cart.remove(idx)} className="text-xs text-white/70 hover:text-white">Usuń</button>
+                {l.kind === 'stl' && (
+                  <div className="mt-1 text-xs text-white/50">Plik: {(l as any).meta.filename}</div>
+                )}
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => cart.setQty(idx, (l as any).qty - 1)} className="w-7 rounded-lg border border-white/10 hover:bg-white/10">-</button>
+                    <input type="number" className="w-12 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-sm" value={(l as any).qty} min={1} onChange={(e)=>cart.setQty(idx, parseInt(e.target.value||'1'))} />
+                    <button onClick={() => cart.setQty(idx, (l as any).qty + 1)} className="w-7 rounded-lg border border-white/10 hover:bg-white/10">+</button>
+                  </div>
+                  <button onClick={() => cart.remove(idx)} className="text-xs text-white/70 hover:text-white">Usuń</button>
+                </div>
               </div>
             </div>
           ))}
@@ -246,7 +341,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                 {file && (<div className="mt-2 text-xs text-white/60">Wybrano: {file.name}</div>)}
               </div>
 
-              <StlViewer file={file} />
+              <StlViewer ref={viewerRef} file={file} />
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -286,7 +381,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                   <div className="mt-3 text-xs text-white/60">Wycena orientacyjna – finalna potwierdzana po krojeniu w Bambu Studio.</div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={addCurrentModelToCart} className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20">Dodaj model do koszyka</button>
-                    <button className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Wyślij do wyceny</button>
+                    <button onClick={openQuote} className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Wyślij do wyceny</button>
                     <button onClick={goContact} className="rounded-xl border border-white/10 px-4 py-2 text-sm hover:bg-white/10">Zadaj pytanie</button>
                   </div>
                 </div>

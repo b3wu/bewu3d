@@ -1,31 +1,50 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useImperativeHandle } from "react";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
+export type StlViewerHandle = {
+  capture: () => string | null; // data URL PNG
+};
+
 type Props = { file: File | null };
 
-export default function StlViewer({ file }: Props) {
+const StlViewer = React.forwardRef<StlViewerHandle, Props>(({ file }, ref) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [heightRange, setHeightRange] = useState<{ min: number; max: number }>({ min: 0, max: 10 });
   const [clipZ, setClipZ] = useState<number>(0);
   const [autoplace, setAutoplace] = useState(true);
 
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+
   const arrayBufferPromise = useMemo(() => (file ? file.arrayBuffer() : null), [file]);
+
+  useImperativeHandle(ref, () => ({
+    capture: () => {
+      const r = rendererRef.current;
+      if (!r) return null;
+      try { return r.domElement.toDataURL("image/png"); } catch { return null; }
+    }
+  }), []);
 
   useEffect(() => {
     if (!mountRef.current) return;
     const mount = mountRef.current;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0B0F14);
+    sceneRef.current = scene;
 
     const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 2000);
     camera.position.set(2.5, 2.5, 3.5);
+    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.localClippingEnabled = true;
+    rendererRef.current = renderer;
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -126,8 +145,10 @@ export default function StlViewer({ file }: Props) {
       if (autoplace) { centerXYDropToBed(geometry); }
 
       geometry.computeBoundingBox();
-      setHeightRange({ min: geometry.boundingBox!.min.z, max: geometry.boundingBox!.max.z });
-      setClipZ(geometry.boundingBox!.min.z);
+      const minz = geometry.boundingBox!.min.z;
+      const maxz = geometry.boundingBox!.max.z;
+      setHeightRange({ min: minz, max: maxz });
+      setClipZ(minz);
 
       currentMesh = new THREE.Mesh(geometry, material);
       group.add(currentMesh);
@@ -148,6 +169,7 @@ export default function StlViewer({ file }: Props) {
       renderer.dispose();
       // @ts-ignore
       delete mount.__clipPlane;
+      rendererRef.current = null; sceneRef.current = null; cameraRef.current = null;
     };
   }, [arrayBufferPromise, autoplace]);
 
@@ -183,4 +205,6 @@ export default function StlViewer({ file }: Props) {
       </div>
     </div>
   );
-}
+});
+
+export default StlViewer;
