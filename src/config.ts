@@ -15,3 +15,10 @@ export const PRINT_RATE_G_PER_H: Record<Material, number> = { PLA: 23, PETG: 22,
 
 // Zaokrąglanie wagi do pełnych gramów (możesz zmienić na 5, jeśli chcesz do 5 g)
 export const ROUND_WEIGHT_TO_G = 1;
+
+// Minimalna wartość zamówienia (PLN) – stosowana do całej wyceny
+export const MIN_ORDER_TOTAL_PLN = 30;
+
+// Dopłata za AMS – liczba darmowych kolorów i dopłata za każdy kolejny
+export const AMS_FREE_COLORS = 1;
+export const AMS_SURCHARGE_PER_EXTRA_COLOR_PLN = 5;

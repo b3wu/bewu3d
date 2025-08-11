@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import ContactPage from './components/ContactPage'
+import ThanksPage from './components/ThanksPage'
 import './index.css'
 
 function Root() {
@@ -13,6 +14,7 @@ function Root() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  if (hash.startsWith('#/thanks')) { return <ThanksPage goHome={() => { window.location.hash = '#/'; }} />; }
   if (hash.startsWith('#/contact')) {
     return <ContactPage goHome={() => { window.location.hash = '#/'; }} />;
   }

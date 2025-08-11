@@ -9,6 +9,9 @@ import {
   USAGE_FACTOR,
   PRINT_RATE_G_PER_H,
   ROUND_WEIGHT_TO_G,
+  MIN_ORDER_TOTAL_PLN,
+  AMS_FREE_COLORS,
+  AMS_SURCHARGE_PER_EXTRA_COLOR_PLN,
 } from "./config";
 
 function LogoBewu3D({ className = "h-8 w-8" }: { className?: string }) {
@@ -134,10 +137,17 @@ export default function App({ goContact }: { goContact: () => void }) {
 
   const estimate = useMemo(() => {
     if (!file || autoWeightG == null) return null;
-    const perPiece = (autoWeightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
-    const total = perPiece * Math.max(1, copies);
-    return { perPiece, total };
-  }, [file, autoWeightG, copies]);
+    const basePerPiece = (autoWeightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
+    const extraColors = Math.max(0, amsColors - AMS_FREE_COLORS);
+    const amsSurchargePerPiece = extraColors * AMS_SURCHARGE_PER_EXTRA_COLOR_PLN;
+    const perPieceBeforeMin = basePerPiece + amsSurchargePerPiece;
+    const qty = Math.max(1, copies);
+    const totalBeforeMin = perPieceBeforeMin * qty;
+    const total = Math.max(MIN_ORDER_TOTAL_PLN, totalBeforeMin);
+    const perPiece = total / qty; // rozdziel min. opłatę proporcjonalnie
+    const appliedMin = total > totalBeforeMin ? MIN_ORDER_TOTAL_PLN : 0;
+    return { perPiece, total, basePerPiece, amsSurchargePerPiece, extraColors, appliedMin };
+  }, [file, autoWeightG, copies, amsColors]);
 
   async function addCurrentModelToCart() {
     if (!file || !estimate || autoWeightG == null) return;
@@ -176,6 +186,8 @@ export default function App({ goContact }: { goContact: () => void }) {
           material, colors: amsColors, copies,
           weightG: autoWeightG, timeH: autoTimeH,
           pricePerPiece: Number(estimate.perPiece.toFixed(2)),
+          amsSurchargePerPiece: Number(estimate.amsSurchargePerPiece.toFixed(2)),
+          appliedMinOrder: estimate.appliedMin,
           total: Number(estimate.total.toFixed(2)),
         },
         attachment,
@@ -187,7 +199,7 @@ export default function App({ goContact }: { goContact: () => void }) {
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (data.ok) { setQStatus({ ok: true, msg: "Wysłane. Odezwiemy się wkrótce." }); }
+      if (data.ok) { setQStatus({ ok: true, msg: "Wysłane. Odezwiemy się wkrótce." }); setTimeout(()=>{ setShowQuote(false); window.location.hash = '#/thanks'; }, 800); }
       else { setQStatus({ ok: false, msg: data.error || "Nie udało się wysłać." }); }
     } catch {
       setQStatus({ ok: false, msg: "Błąd połączenia." });
@@ -374,10 +386,11 @@ export default function App({ goContact }: { goContact: () => void }) {
                   <div className="text-sm text-white/70">Szacunek dla {copies} szt. ({material})</div>
                   <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
                     <div className="text-white/60">Cena za sztukę</div><div className="text-right font-semibold">{estimate.perPiece.toFixed(2)} PLN</div>
-                    <div className="text-white/60">Razem</div><div className="text-right font-semibold">{estimate.total.toFixed(2)} PLN</div>
+                    <div className="text-white/60">Razem</div><div className="text-right font-semibold">{estimate.total.toFixed(2)} PLN{estimate.appliedMin ? " (z min. " + estimate.appliedMin + " PLN)" : ""}</div>
+                    <div className="text-white/60">Dopłata AMS</div><div className="text-right">{estimate.amsSurchargePerPiece.toFixed(2)} PLN/szt. {estimate.extraColors>0 ? "(+"+estimate.extraColors+" kol.)" : "(brak)"}</div>
                     <div className="text-white/60">Szac. czas druku</div><div className="text-right font-semibold">{autoTimeH ? autoTimeH.toFixed(2) : '-'} h</div>
                     <div className="text-white/60">Waga</div><div className="text-right font-semibold">{autoWeightG?.toFixed(0)} g</div>
-                  </div>
+                  </div></div>
                   <div className="mt-3 text-xs text-white/60">Wycena orientacyjna – finalna potwierdzana po krojeniu w Bambu Studio.</div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={addCurrentModelToCart} className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20">Dodaj model do koszyka</button>
