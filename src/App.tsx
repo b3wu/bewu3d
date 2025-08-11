@@ -390,7 +390,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                     <div className="text-white/60">Dopłata AMS</div><div className="text-right">{estimate.amsSurchargePerPiece.toFixed(2)} PLN/szt. {estimate.extraColors>0 ? "(+"+estimate.extraColors+" kol.)" : "(brak)"}</div>
                     <div className="text-white/60">Szac. czas druku</div><div className="text-right font-semibold">{autoTimeH ? autoTimeH.toFixed(2) : '-'} h</div>
                     <div className="text-white/60">Waga</div><div className="text-right font-semibold">{autoWeightG?.toFixed(0)} g</div>
-                  </div></div>
+                  </div>
                   <div className="mt-3 text-xs text-white/60">Wycena orientacyjna – finalna potwierdzana po krojeniu w Bambu Studio.</div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={addCurrentModelToCart} className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20">Dodaj model do koszyka</button>
