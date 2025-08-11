@@ -2,6 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import StlViewer from "./components/StlViewer";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader";
 import * as THREE from "three";
+import {
+  Material,
+  MATERIAL_RATE_PLN_PER_KG,
+  DENSITY,
+  USAGE_FACTOR,
+  PRINT_RATE_G_PER_H,
+  ROUND_WEIGHT_TO_G,
+} from "./config";
 
 function LogoBewu3D({ className = "h-8 w-8" }: { className?: string }) {
   return <img src="/logo.svg" className={className} alt="Bewu3D logo" />;
@@ -16,9 +24,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-type Material = "PLA" | "PETG" | "ABS";
 type Product = { id: number; name: string; price: number };
-
 const PRODUCTS: Product[] = [
   { id: 1, name: "Uchwyt na słuchawki", price: 59 },
   { id: 2, name: "Organizer na biurko", price: 79 },
@@ -27,12 +33,6 @@ const PRODUCTS: Product[] = [
   { id: 5, name: "Wieszak na kable", price: 25 },
   { id: 6, name: "Model dekoracyjny", price: 119 },
 ];
-
-const MATERIAL_RATE_PLN_PER_KG = 150;
-const DENSITY: Record<Material, number> = { PLA: 1.24, PETG: 1.27, ABS: 1.04 }; // g/cm^3
-const DEFAULT_USAGE_FACTOR = 0.30;
-const DEFAULT_THROUGHPUT_G_PER_H = 20;
-const AMS_EXTRA_COLOR_SURCHARGE = 0;
 
 async function estimateVolumeCm3FromSTL(file: File): Promise<number | null> {
   try {
@@ -92,56 +92,56 @@ export default function App({ goContact }: { goContact: () => void }) {
   const [amsColors, setAmsColors] = useState<number>(1);
 
   const [autoVolCm3, setAutoVolCm3] = useState<number | null>(null);
-  const [usageFactor, setUsageFactor] = useState<number>(DEFAULT_USAGE_FACTOR);
-  const [weightG, setWeightG] = useState<number | null>(null);
-  const [throughputGph, setThroughputGph] = useState<number>(DEFAULT_THROUGHPUT_G_PER_H);
-  const [timeH, setTimeH] = useState<number | null>(null);
+  const [autoWeightG, setAutoWeightG] = useState<number | null>(null);
+  const [autoTimeH, setAutoTimeH] = useState<number | null>(null);
 
   const cart = useCart();
   const [cartOpen, setCartOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    if (!file) { setAutoVolCm3(null); setWeightG(null); setTimeH(null); return; }
+    if (!file) { setAutoVolCm3(null); setAutoWeightG(null); setAutoTimeH(null); return; }
     (async () => {
       const vol = await estimateVolumeCm3FromSTL(file);
       if (cancelled) return;
       setAutoVolCm3(vol);
       if (vol) {
-        const w = vol * DENSITY[material] * usageFactor;
-        setWeightG(parseFloat(w.toFixed(1)));
+        const usage = USAGE_FACTOR[material];
+        const density = DENSITY[material];
+        const weight = vol * density * usage; // g
+        const rounded = Math.ceil(weight / ROUND_WEIGHT_TO_G) * ROUND_WEIGHT_TO_G;
+        setAutoWeightG(parseFloat(rounded.toFixed(1)));
+        const rate = PRINT_RATE_G_PER_H[material];
+        setAutoTimeH(parseFloat((rounded / rate).toFixed(2)));
       }
     })();
-    return () => { cancelled = true; };
-  }, [file]);
+    return () => { cancelled = True; };
+  }, [file, material]);
 
+  // Recompute weight and time when material changes (if we still have volume)
   useEffect(() => {
     if (autoVolCm3 && autoVolCm3 > 0) {
-      const w = autoVolCm3 * DENSITY[material] * usageFactor;
-      setWeightG(parseFloat(w.toFixed(1)));
+      const usage = USAGE_FACTOR[material];
+      const density = DENSITY[material];
+      const weight = autoVolCm3 * density * usage;
+      const rounded = Math.ceil(weight / ROUND_WEIGHT_TO_G) * ROUND_WEIGHT_TO_G;
+      setAutoWeightG(parseFloat(rounded.toFixed(1)));
+      const rate = PRINT_RATE_G_PER_H[material];
+      setAutoTimeH(parseFloat((rounded / rate).toFixed(2)));
     }
-  }, [material, usageFactor, autoVolCm3]);
-
-  useEffect(() => {
-    if (weightG != null && throughputGph > 0) {
-      const t = weightG / throughputGph;
-      setTimeH(parseFloat(t.toFixed(2)));
-    }
-  }, [weightG, throughputGph]);
+  }, [material, autoVolCm3]);
 
   const estimate = useMemo(() => {
-    if (!file || weightG == null) return null;
-    const basePerPiece = (weightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
-    const colorExtra = Math.max(0, amsColors - 1) * AMS_EXTRA_COLOR_SURCHARGE;
-    const perPiece = basePerPiece + colorExtra;
+    if (!file || autoWeightG == null) return null;
+    const perPiece = (autoWeightG / 1000) * MATERIAL_RATE_PLN_PER_KG;
     const total = perPiece * Math.max(1, copies);
     return { perPiece, total };
-  }, [file, weightG, copies, amsColors]);
+  }, [file, autoWeightG, copies]);
 
   function addCurrentModelToCart() {
-    if (!file || !estimate || weightG == null) return;
+    if (!file || !estimate || autoWeightG == null) return;
     cart.addCustom(file.name, Number(estimate.perPiece.toFixed(2)), copies, {
-      material, filename: file.name, weightG, colors: amsColors
+      material, filename: file.name, weightG: autoWeightG, colors: amsColors
     });
     setCartOpen(true);
   }
@@ -215,7 +215,7 @@ export default function App({ goContact }: { goContact: () => void }) {
             <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
               Nowoczesny <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#36F3D6] to-[#00A3FF]">druk 3D</span><br />na żądanie
             </h1>
-            <p className="mt-4 text-white/70">Bambu Lab A1 + AMS – kolory? Jasne. Wgraj STL, obejrzyj w 3D i wyceń wg wagi.</p>
+            <p className="mt-4 text-white/70">Bambu Lab A1 + AMS – kolory? Jasne. Wgraj STL, obejrzyj w 3D i wyceń wg wagi (150 PLN/kg).</p>
             <div className="mt-6 flex items-center gap-3">
               <a href="#upload" className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10">Wgraj STL</a>
               <a href="#showcase" className="text-sm text-white/70 hover:text-white">Zobacz realizacje →</a>
@@ -237,7 +237,7 @@ export default function App({ goContact }: { goContact: () => void }) {
         <div className="grid gap-8 md:grid-cols-2">
           <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
             <h2 className="text-2xl font-semibold">Wycena wg wagi (+ podgląd STL)</h2>
-            <p className="mt-2 text-sm text-white/70">Cena = waga × {MATERIAL_RATE_PLN_PER_KG} PLN/kg. Auto-waga z STL (szacunek, zależy od infill/ścianek) – możesz nadpisać ręcznie.</p>
+            <p className="mt-2 text-sm text-white/70">Cena = waga × {MATERIAL_RATE_PLN_PER_KG} PLN/kg. Waga i czas liczone automatycznie – bez możliwości edycji przez użytkownika.</p>
 
             <div className="mt-6 space-y-4">
               <div>
@@ -263,37 +263,16 @@ export default function App({ goContact }: { goContact: () => void }) {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm text-white/80">Szac. zużycie materiału (%)</label>
-                  <input type="number" min={1} max={100} value={Math.round(usageFactor * 100)} onChange={(e)=>setUsageFactor(Math.min(1, Math.max(0.01, Number(e.target.value)/100)))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
-                  <div className="mt-1 text-xs text-white/50">Obwiednie + infill (np. 30% dla 20% infill + ścianki).</div>
+                  <div className="text-sm text-white/60">Waga (auto)</div>
+                  <div className="mt-1 text-lg font-semibold">{autoWeightG != null ? `${autoWeightG.toFixed(0)} g` : "—"}</div>
+                  {autoVolCm3 && (<div className="text-xs text-white/50">Objętość: {autoVolCm3.toFixed(1)} cm³</div>)}
                 </div>
                 <div>
-                  <label className="text-sm text-white/80">Kolory (AMS)</label>
-                  <input type="number" min={1} value={amsColors} onChange={(e)=>setAmsColors(Math.max(1, Number(e.target.value)))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
+                  <div className="text-sm text-white/60">Szac. czas (auto)</div>
+                  <div className="mt-1 text-lg font-semibold">{autoTimeH != null ? `${autoTimeH.toFixed(2)} h` : "—"}</div>
+                  <div className="text-xs text-white/50">Stawka: {PRINT_RATE_G_PER_H[material]} g/h</div>
                 </div>
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm text-white/80">Waga (g)</label>
-                  <input type="number" min={1} value={weightG ?? ''} onChange={(e)=>setWeightG(Math.max(1, Number(e.target.value)))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" placeholder={autoVolCm3 ? (autoVolCm3 * DENSITY[material] * usageFactor).toFixed(1) : 'np. 134'} />
-                  {autoVolCm3 && <div className="mt-1 text-xs text-white/50">Auto: {(autoVolCm3 * DENSITY[material] * usageFactor).toFixed(1)} g (objętość {autoVolCm3.toFixed(1)} cm³)</div>}
-                </div>
-                <div>
-                  <label className="text-sm text-white/80">Wydajność (g/h)</label>
-                  <input type="number" min={1} value={throughputGph} onChange={(e)=>setThroughputGph(Math.max(1, Number(e.target.value)))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
-                  <div className="mt-1 text-xs text-white/50">Szacunek czasu = waga / wydajność.</div>
-                </div>
-              </div>
-
-              {weightG != null && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-sm text-white/80">Szac. czas (h)</label>
-                    <input type="number" min={0.1} step={0.1} value={timeH ?? ''} onChange={(e)=>setTimeH(Math.max(0.1, Number(e.target.value)))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#0B0F14] p-3 text-sm" />
-                  </div>
-                </div>
-              )}
 
               {estimate ? (
                 <div className="mt-4 rounded-2xl bg-[#0B0F14] p-4 ring-1 ring-white/10">
@@ -301,10 +280,10 @@ export default function App({ goContact }: { goContact: () => void }) {
                   <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
                     <div className="text-white/60">Cena za sztukę</div><div className="text-right font-semibold">{estimate.perPiece.toFixed(2)} PLN</div>
                     <div className="text-white/60">Razem</div><div className="text-right font-semibold">{estimate.total.toFixed(2)} PLN</div>
-                    <div className="text-white/60">Szac. czas druku</div><div className="text-right font-semibold">{timeH ? timeH.toFixed(2) : '-'} h</div>
-                    <div className="text-white/60">Waga</div><div className="text-right font-semibold">{weightG?.toFixed(0)} g</div>
+                    <div className="text-white/60">Szac. czas druku</div><div className="text-right font-semibold">{autoTimeH ? autoTimeH.toFixed(2) : '-'} h</div>
+                    <div className="text-white/60">Waga</div><div className="text-right font-semibold">{autoWeightG?.toFixed(0)} g</div>
                   </div>
-                  <div className="mt-3 text-xs text-white/60">Uwaga: auto-waga to szacunek (zależy od ustawień slicera). Najlepiej wpisać wagę i czas z Bambu Studio.</div>
+                  <div className="mt-3 text-xs text-white/60">Wycena orientacyjna – finalna potwierdzana po krojeniu w Bambu Studio.</div>
                   <div className="mt-4 flex flex-wrap gap-3">
                     <button onClick={addCurrentModelToCart} className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20">Dodaj model do koszyka</button>
                     <button className="rounded-xl bg-gradient-to-r from-[#36F3D6] to-[#00A3FF] px-4 py-2 text-sm font-semibold text-[#0B0F14]">Wyślij do wyceny</button>
@@ -312,7 +291,7 @@ export default function App({ goContact }: { goContact: () => void }) {
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/60">Wgraj plik STL, ustaw wagę/czas (lub użyj auto) i dodaj do koszyka.</div>
+                <div className="mt-4 rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/60">Wgraj plik STL, aby zobaczyć wycenę.</div>
               )}
             </div>
           </div>
@@ -320,11 +299,11 @@ export default function App({ goContact }: { goContact: () => void }) {
           <div className="grid gap-4">
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/5 to-white/0 p-6">
               <h3 className="text-xl font-semibold">Materiały</h3>
-              <p className="mt-2 text-sm text-white/70">PLA, PETG, ABS (bez żywic). Cena wg wagi – prosto i uczciwie.</p>
+              <p className="mt-2 text-sm text-white/70">PLA, PETG, ABS. Cena liczona prosto: {MATERIAL_RATE_PLN_PER_KG} PLN/kg.</p>
             </div>
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/5 to-white/0 p-6">
               <h3 className="text-xl font-semibold">AMS</h3>
-              <p className="mt-2 text-sm text-white/70">Wielokolorowe wydruki dzięki AMS. Opcjonalna dopłata za dodatkowe kolory.</p>
+              <p className="mt-2 text-sm text-white/70">Wielokolorowe wydruki dzięki AMS. (Dopłatę za kolory możemy dodać później.)</p>
             </div>
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/5 to-white/0 p-6">
               <h3 className="text-xl font-semibold">Szybka realizacja</h3>
