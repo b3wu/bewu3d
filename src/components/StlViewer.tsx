@@ -1,0 +1,186 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as THREE from "three";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+
+type Props = { file: File | null };
+
+export default function StlViewer({ file }: Props) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const [heightRange, setHeightRange] = useState<{ min: number; max: number }>({ min: 0, max: 10 });
+  const [clipZ, setClipZ] = useState<number>(0);
+  const [autoplace, setAutoplace] = useState(true);
+
+  const arrayBufferPromise = useMemo(() => (file ? file.arrayBuffer() : null), [file]);
+
+  useEffect(() => {
+    if (!mountRef.current) return;
+    const mount = mountRef.current;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0B0F14);
+
+    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 2000);
+    camera.position.set(2.5, 2.5, 3.5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    renderer.localClippingEnabled = true;
+    mount.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 0.8));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(5,10,7.5);
+    scene.add(dir);
+
+    const grid = new THREE.GridHelper(10, 20, 0x224444, 0x112222);
+    grid.position.y = 0;
+    scene.add(grid);
+
+    const group = new THREE.Group();
+    scene.add(group);
+
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x66e7d4,
+      metalness: 0.05,
+      roughness: 0.75,
+      side: THREE.DoubleSide,
+      clippingPlanes: [plane],
+      clipShadows: true,
+    });
+    // @ts-ignore
+    mount.__clipPlane = plane;
+
+    function centerXYDropToBed(geometry: THREE.BufferGeometry) {
+      geometry.computeBoundingBox();
+      const bb = geometry.boundingBox!;
+      const size = new THREE.Vector3(); bb.getSize(size);
+      const center = new THREE.Vector3(); bb.getCenter(center);
+      geometry.translate(-center.x, -center.y, 0);
+      geometry.computeBoundingBox();
+      const bb2 = geometry.boundingBox!;
+      geometry.translate(0, 0, -bb2.min.z);
+    }
+
+    function layFlatByLargestTriangle(geometry: THREE.BufferGeometry) {
+      const pos = geometry.getAttribute('position');
+      if (!pos) return;
+      let maxArea = 0;
+      let bestNormal = new THREE.Vector3(0,0,1);
+      const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i += 3) {
+        vA.fromBufferAttribute(pos as any, i + 0);
+        vB.fromBufferAttribute(pos as any, i + 1);
+        vC.fromBufferAttribute(pos as any, i + 2);
+        const ab = new THREE.Vector3().subVectors(vB, vA);
+        const ac = new THREE.Vector3().subVectors(vC, vA);
+        const cross = new THREE.Vector3().crossVectors(ab, ac);
+        const area = cross.length() * 0.5;
+        if (area > maxArea) { maxArea = area; bestNormal.copy(cross.normalize()); }
+      }
+      const target = new THREE.Vector3(0,0,1);
+      const q = new THREE.Quaternion().setFromUnitVectors(bestNormal, target);
+      geometry.applyQuaternion(q);
+      geometry.computeBoundingBox();
+      const h1 = geometry.boundingBox!.max.z - geometry.boundingBox!.min.z;
+      const qFlip = new THREE.Quaternion().setFromUnitVectors(bestNormal, target.negate());
+      const clone = geometry.clone().applyQuaternion(qFlip);
+      clone.computeBoundingBox();
+      const h2 = clone.boundingBox!.max.z - clone.boundingBox!.min.z;
+      if (h2 < h1) { geometry.applyQuaternion(new THREE.Quaternion().invert(q)); geometry.applyQuaternion(qFlip); }
+    }
+
+    let animId: number;
+    const animate = () => { controls.update(); renderer.render(scene, camera); animId = requestAnimationFrame(animate); };
+    animate();
+
+    const ro = new ResizeObserver(() => {
+      const w = mount.clientWidth, h = mount.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    });
+    ro.observe(mount);
+
+    let currentMesh: THREE.Mesh | null = null;
+    (async () => {
+      if (!arrayBufferPromise) return;
+      const arrayBuffer = await arrayBufferPromise;
+      const loader = new STLLoader();
+      const geometry = loader.parse(arrayBuffer as ArrayBuffer);
+      geometry.computeVertexNormals();
+
+      if (autoplace) { layFlatByLargestTriangle(geometry); centerXYDropToBed(geometry); }
+
+      geometry.computeBoundingBox();
+      const bb = geometry.boundingBox!;
+      const size = new THREE.Vector3(); bb.getSize(size);
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      const scale = 1.5 / maxDim;
+      geometry.scale(scale, scale, scale);
+
+      if (autoplace) { centerXYDropToBed(geometry); }
+
+      geometry.computeBoundingBox();
+      setHeightRange({ min: geometry.boundingBox!.min.z, max: geometry.boundingBox!.max.z });
+      setClipZ(geometry.boundingBox!.min.z);
+
+      currentMesh = new THREE.Mesh(geometry, material);
+      group.add(currentMesh);
+
+      geometry.computeBoundingSphere();
+      const r = geometry.boundingSphere?.radius || 2;
+      const dist = r * 3.2;
+      camera.position.set(dist, dist, dist);
+      controls.target.set(0,0,0);
+      controls.update();
+    })();
+
+    return () => {
+      cancelAnimationFrame(animId);
+      ro.disconnect();
+      controls.dispose();
+      if (renderer.domElement.parentElement) renderer.domElement.parentElement.removeChild(renderer.domElement);
+      renderer.dispose();
+      // @ts-ignore
+      delete mount.__clipPlane;
+    };
+  }, [arrayBufferPromise, autoplace]);
+
+  useEffect(() => {
+    const mount = mountRef.current as any;
+    if (mount && mount.__clipPlane) {
+      (mount.__clipPlane as THREE.Plane).constant = clipZ;
+    }
+  }, [clipZ]);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[#0B0F14]">
+      <div className="flex items-center justify-between p-3 text-xs text-white/70">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={autoplace} onChange={(e)=>setAutoplace(e.target.checked)} />
+          Auto: połóż na stole (beta)
+        </label>
+        <span>Obracaj myszką • scroll = zoom</span>
+      </div>
+      <div ref={mountRef} className="h-80 w-full" />
+      <div className="p-4 flex items-center gap-3">
+        <label className="text-sm text-white/80">Warstwa (Z):</label>
+        <input
+          type="range"
+          className="w-full"
+          min={heightRange.min}
+          max={heightRange.max}
+          step={((heightRange.max - heightRange.min) || 1) / 200}
+          value={clipZ}
+          onChange={(e) => setClipZ(parseFloat(e.target.value))}
+        />
+        <div className="text-xs text-white/60 w-24 text-right">{clipZ.toFixed(2)}</div>
+      </div>
+    </div>
+  );
+}
